@@ -12,7 +12,7 @@ pub async fn send_message(bootstrap_servers: &str, topic: &str, message: &str) -
         .payload(message)
         .key("key");
 
-    match producer.send(record, Duration::from_secs(0)).await {
+    match producer.send(record, Duration::from_secs(200)).await {
         Ok(_) => println!("Message sent successfully"),
         Err((e, _)) => println!("Failed to send message: {}", e),
     }
@@ -22,7 +22,7 @@ pub async fn send_message(bootstrap_servers: &str, topic: &str, message: &str) -
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, time::Duration};
 
     use testcontainers::{clients::Cli, core::WaitFor, Image, RunnableImage};
 
@@ -44,7 +44,7 @@ mod tests {
         }
 
         fn ready_conditions(&self) -> Vec<WaitFor> {
-            vec![WaitFor::message_on_stdout("Hello from Docker!")]
+            vec![WaitFor::message_on_stdout("Hello from Docker!"),WaitFor::Duration { length: (Duration::from_secs(1000)) }]
         }
 
         fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
@@ -63,7 +63,7 @@ mod tests {
         let docker = Cli::default();
         let kafka_node = docker.run(RunnableImage::from(HelloWorld::default()));
     
-        let bootstrap_servers = format!("localhost:{}", kafka_node.get_host_port_ipv4(9093));
+        let bootstrap_servers = format!("localhost:{}", kafka_node.get_host_port_ipv4(9092));
         let topic = "test-topic";
     
         // ここでProducerを使ってメッセージを送信
