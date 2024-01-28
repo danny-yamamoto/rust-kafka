@@ -1,75 +1,122 @@
-use std::time::Duration;
+use std::collections::HashMap;
 
-use rdkafka::config::ClientConfig;
-use rdkafka::producer::{FutureProducer, FutureRecord};
+use testcontainers::{core::WaitFor, Image};
 
-pub async fn send_message(bootstrap_servers: &str, topic: &str, message: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let producer: FutureProducer = ClientConfig::new()
-        .set("bootstrap.servers", bootstrap_servers)
-        .create()?;
+const NAME: &str = "postgres";
+const TAG: &str = "13";
 
-    let record = FutureRecord::to(topic)
-        .payload(message)
-        .key("key");
+#[derive(Debug)]
+pub struct Postgres {
+    env_vars: HashMap<String, String>,
+}
 
-    match producer.send(record, Duration::from_secs(200)).await {
-        Ok(_) => println!("Message sent successfully"),
-        Err((e, _)) => println!("Failed to send message: {}", e),
+impl Postgres {
+    /// Enables the Postgres instance to be used without authentication on host.
+    /// For more information see the description of `POSTGRES_HOST_AUTH_METHOD` in official [docker image](https://hub.docker.com/_/postgres)
+    pub fn with_host_auth(mut self) -> Self {
+        self.env_vars
+            .insert("POSTGRES_HOST_AUTH_METHOD".to_owned(), "trust".to_owned());
+        self
     }
 
-    Ok(())
+    /// Sets the db name for the Postgres instance.
+    pub fn with_db_name(mut self, db_name: &str) -> Self {
+        self.env_vars
+            .insert("POSTGRES_DB".to_owned(), db_name.to_owned());
+        self
+    }
+
+    /// Sets the user for the Postgres instance.
+    pub fn with_user(mut self, user: &str) -> Self {
+        self.env_vars
+            .insert("POSTGRES_USER".to_owned(), user.to_owned());
+        self
+    }
+
+    /// Sets the password for the Postgres instance.
+    pub fn with_password(mut self, password: &str) -> Self {
+        self.env_vars
+            .insert("POSTGRES_PASSWORD".to_owned(), password.to_owned());
+        self
+    }
+}
+
+impl Default for Postgres {
+    fn default() -> Self {
+        let mut env_vars = HashMap::new();
+        env_vars.insert("POSTGRES_DB".to_owned(), "postgres".to_owned());
+        env_vars.insert("POSTGRES_USER".to_owned(), "postgres".to_owned());
+        env_vars.insert("POSTGRES_PASSWORD".to_owned(), "postgres".to_owned());
+
+        Self { env_vars }
+    }
+}
+
+impl Image for Postgres {
+    type Args = ();
+
+    fn name(&self) -> String {
+        NAME.to_owned()
+    }
+
+    fn tag(&self) -> String {
+        TAG.to_owned()
+    }
+
+    fn ready_conditions(&self) -> Vec<WaitFor> {
+        vec![WaitFor::message_on_stderr(
+            "database system is ready to accept connections",
+        )]
+    }
+
+    fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
+        Box::new(self.env_vars.iter())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, time::Duration};
+    use testcontainers::{clients, RunnableImage};
 
-    use testcontainers::{clients::Cli, core::WaitFor, Image, RunnableImage};
+    use super::*;
 
-    #[derive(Default)]
-    struct HelloWorld {
-        volumes: BTreeMap<String, String>,
-        env_vars: BTreeMap<String, String>,
+    #[test]
+    fn postgres_one_plus_one() {
+        let docker = clients::Cli::default();
+        let postgres_image = Postgres::default().with_host_auth();
+        let node = docker.run(postgres_image);
+
+        let connection_string = &format!(
+            "postgres://postgres@127.0.0.1:{}/postgres",
+            node.get_host_port_ipv4(5432)
+        );
+        let mut conn = postgres::Client::connect(connection_string, postgres::NoTls).unwrap();
+
+        let rows = conn.query("SELECT 1 + 1", &[]).unwrap();
+        assert_eq!(rows.len(), 1);
+
+        let first_row = &rows[0];
+        let first_column: i32 = first_row.get(0);
+        assert_eq!(first_column, 2);
     }
 
-    impl Image for HelloWorld {
-        type Args = ();
+    #[test]
+    fn postgres_custom_version() {
+        let docker = clients::Cli::default();
+        let image = RunnableImage::from(Postgres::default()).with_tag("13-alpine");
+        let node = docker.run(image);
 
-        fn name(&self) -> String {
-            "confluentinc/cp-kafka".to_owned()
-        }
+        let connection_string = &format!(
+            "postgres://postgres:postgres@127.0.0.1:{}/postgres",
+            node.get_host_port_ipv4(5432)
+        );
+        let mut conn = postgres::Client::connect(connection_string, postgres::NoTls).unwrap();
 
-        fn tag(&self) -> String {
-            "latest".to_owned()
-        }
+        let rows = conn.query("SELECT version()", &[]).unwrap();
+        assert_eq!(rows.len(), 1);
 
-        fn ready_conditions(&self) -> Vec<WaitFor> {
-            vec![WaitFor::message_on_stdout("Hello from Docker!"),WaitFor::Duration { length: (Duration::from_secs(1000)) }]
-        }
-
-        fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
-            Box::new(self.env_vars.iter())
-        }
-
-        fn volumes(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
-            Box::new(self.volumes.iter())
-        }
-    }
-
-    use crate::send_message;
-    #[tokio::test]
-    async fn test_kafka_producer() {
-        //let docker = clients::Cli::default();
-        let docker = Cli::default();
-        let kafka_node = docker.run(RunnableImage::from(HelloWorld::default()));
-    
-        let bootstrap_servers = format!("localhost:{}", kafka_node.get_host_port_ipv4(9092));
-        let topic = "test-topic";
-    
-        // ここでProducerを使ってメッセージを送信
-        send_message(&bootstrap_servers, topic, "Hello Kafka").await.expect("Failed to send message");
-    
-        // ここで送信されたメッセージを検証
-        // 実際のテストではConsumerを使用して送信されたメッセージを検証する必要があります
+        let first_row = &rows[0];
+        let first_column: String = first_row.get(0);
+        assert!(first_column.contains("13"));
     }
 }
