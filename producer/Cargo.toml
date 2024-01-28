@@ -5,8 +5,7 @@ edition = "2021"
 
 [dependencies]
 rdkafka = "0.36.2"
-testcontainers = "0.15.0"
+testcontainers = { version = "0.15.0", feature = "postgres" }
+testcontainers-modules = {version = "0.3.1"}
 tokio = { version = "1.35.1", features = ["full"] }
-
-[dev-dependencies]
-testcontainers = "0.15.0"
+postgres = "0.19.7"
